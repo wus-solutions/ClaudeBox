@@ -413,21 +413,15 @@ that is defensible, but it is a property, not a detail.
 
 Resource type **Docker Compose**, pointing at this repository.
 
-**Rollout happens only from the GitHub Action.** `.github/workflows/tests.yml`
-runs `test/compose.sh` and `test/image.sh` on every push and only nudges Coolify
-once both are green — only for pushes to `main`, never for pull requests. For
-that to work:
+`.github/workflows/tests.yml` runs `test/compose.sh` and `test/image.sh` on
+every push and pull request. It deliberately **does not deploy** — this
+repository ships without a rollout step, so a fork never carries someone else's
+deploy target.
 
-- Turn **Automatic Deployment off** in Coolify. Coolify does not see the test
-  runs and would otherwise roll out on push itself, without waiting for the
-  tests.
-- `gh secret set COOLIFY_WEBHOOK_URL` — the application's deploy address
-  (Coolify → Webhooks), `https://<coolify>/api/v1/deploy?uuid=<app-uuid>`.
-- `gh secret set COOLIFY_AUTH_TOKEN` — an API token with deploy permission
-  (Coolify → Keys & Tokens).
-
-A green deploy job only means Coolify accepted the nudge. Whether the deployment
-went through is in Coolify.
+If you want the tests to gate your own rollout, add a job that runs after
+`tests` and calls your Coolify deploy webhook. Then turn **Automatic Deployment
+off** in Coolify: it does not see the test runs and would otherwise roll out on
+push itself, without waiting for them.
 
 **Assign no domain and expose no ports** — otherwise the Coolify proxy creates a
 public entry and the whole point is gone.
@@ -489,7 +483,7 @@ down with it.
 `test/compose.sh` needs neither `.env` nor a tailnet and proves that no service
 hangs off a host path.
 
-`compose.sh` and `image.sh` run in the GitHub Action before every deployment.
+`compose.sh` and `image.sh` run in the GitHub Action on every push.
 `stack.sh` does not: it needs an auth key and registered a new node in the tailnet
 on every run.
 

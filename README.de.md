@@ -420,20 +420,15 @@ hinterlegte Pubkey kann den Agenten auslösen.
 
 Resource-Typ **Docker Compose**, auf dieses Repository zeigend.
 
-**Ausgerollt wird nur aus der GitHub Action.** `.github/workflows/tests.yml`
-führt bei jedem Push `test/compose.sh` und `test/image.sh` aus und stößt
-Coolify erst an, wenn beide grün sind — nur für Pushes auf `main`, nie für
-Pull Requests. Damit das wirkt:
+`.github/workflows/tests.yml` führt bei jedem Push und jedem Pull Request
+`test/compose.sh` und `test/image.sh` aus. Ausgerollt wird dabei **bewusst
+nicht** — dieses Repository kommt ohne Deployment-Schritt, damit ein Fork nicht
+das Deploy-Ziel eines Fremden mitschleppt.
 
-- In Coolify **Automatic Deployment aus**. Coolify sieht die Testläufe nicht
-  und rollte sonst beim Push selbst aus, ohne auf die Tests zu warten.
-- `gh secret set COOLIFY_WEBHOOK_URL` — die Deploy-Adresse der Anwendung
-  (Coolify → Webhooks), `https://<coolify>/api/v1/deploy?uuid=<app-uuid>`.
-- `gh secret set COOLIFY_AUTH_TOKEN` — ein API-Token mit Deploy-Recht
-  (Coolify → Keys & Tokens).
-
-Ein grüner Deploy-Job heißt nur, dass Coolify den Anstoß angenommen hat. Ob das
-Deployment durchlief, steht in Coolify.
+Wer die Tests vor den eigenen Rollout hängen will, ergänzt einen Job, der nach
+`tests` läuft und den eigenen Coolify-Deploy-Webhook aufruft. Dann in Coolify
+**Automatic Deployment aus**: Coolify sieht die Testläufe nicht und rollte sonst
+beim Push selbst aus, ohne auf sie zu warten.
 
 **Keine Domain zuweisen und keine Ports freigeben** — sonst legt der
 Coolify-Proxy einen öffentlichen Eintrag an und der ganze Zweck ist dahin.
@@ -497,7 +492,7 @@ abgebrochen und hat das Deployment mitgerissen.
 `test/compose.sh` braucht weder `.env` noch Tailnet und belegt, dass kein
 Service an einem Host-Pfad hängt.
 
-`compose.sh` und `image.sh` laufen in der GitHub Action vor jedem Deployment.
+`compose.sh` und `image.sh` laufen in der GitHub Action bei jedem Push.
 `stack.sh` nicht: Es braucht einen Auth-Key und meldete bei jedem Lauf einen
 neuen Node im Tailnet an.
 
