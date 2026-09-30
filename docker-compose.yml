@@ -1,0 +1,92 @@
+# Kein ports:-Block. Der Stack ist ausschliesslich ueber das Tailnet erreichbar.
+services:
+  tailscale:
+    # Das offizielle Image plus docker/serve.json. Kein Bind-Mount: unter
+    # Coolify wird daraus ein leeres Verzeichnis (siehe tailscale.Dockerfile).
+    build:
+      context: ./docker
+      dockerfile: tailscale.Dockerfile
+      # Bei jedem Build die aktuelle stable-Basis ziehen, sonst bliebe der
+      # Sidecar auf dem Stand des ersten Builds im Cache stehen.
+      pull: true
+    # Bewusst OHNE platform-Angabe: nur unser eigenes Image braucht amd64
+    # (wegen der Buzz-Binaries). Zwingt man den Sidecar unter Rosetta-Emulation,
+    # scheitert die Anmeldung am Controlplane mit
+    # "chacha20poly1305: message authentication failed".
+    # Netzwerk-Namespaces sind architekturunabhaengig - die beiden Container
+    # duerfen sich unterscheiden.
+    hostname: ${TS_HOSTNAME:?TS_HOSTNAME fehlt in .env}
+    environment:
+      # Nur fuer die erste Anmeldung (siehe TS_AUTH_ONCE). Danach aus der
+      # Umgebung nehmen: Coolify reicht jede Variable auch in den claude-Container.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      # Userspace-Networking braucht weder /dev/net/tun noch NET_ADMIN. Auf einem
+      # selbst virtualisierten VPS fehlt das TUN-Device regelmaessig.
+      TS_USERSPACE: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+      # containerboot macht daraus --hostname. Nicht zusaetzlich in
+      # TS_EXTRA_ARGS: Coolify reicht TS_HOSTNAME per env_file ohnehin in den
+      # Container, und ein doppeltes Flag laesst "tailscale up" abbrechen.
+      TS_HOSTNAME: ${TS_HOSTNAME}
+      # Den Auth-Key nur benutzen, solange der Node nicht angemeldet ist. Ohne
+      # das ruft containerboot bei jedem Start "tailscale up --authkey" auf -
+      # mit einem verbrauchten Einmal-Key scheitert dann jeder Redeploy.
+      TS_AUTH_ONCE: "true"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+
+  claude:
+    build:
+      context: .
+    platform: linux/amd64
+    # Der claude-Container besitzt keinen eigenen Netzwerk-Stack. Er kann
+    # deshalb strukturell nichts am Tailnet vorbei exponieren - und er kann
+    # aus demselben Grund keinem zweiten Netz beitreten. Projekt-Netze
+    # gehoeren an den tailscale-Service.
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+    environment:
+      # Ohne Zeitzone laeuft alles in UTC - vor allem cron. Braucht tzdata aus
+      # packages.txt, sonst bleibt es bei UTC.
+      TZ: ${TZ:-Europe/Berlin}
+      BUZZ_RELAY_URL: ${BUZZ_RELAY_URL:?BUZZ_RELAY_URL fehlt in .env}
+      BUZZ_PRIVATE_KEY: ${BUZZ_PRIVATE_KEY:-}
+      BUZZ_AGENTS: ${BUZZ_AGENTS:-}
+      BUZZ_ACP_AGENT_OWNER: ${BUZZ_ACP_AGENT_OWNER:?BUZZ_ACP_AGENT_OWNER fehlt in .env}
+      # Optional. Ohne diese Zeilen greifen die leeren Defaults aus dem Image,
+      # und der Credential-Helper sieht nie einen Token.
+      GITHUB_TOKENS: ${GITHUB_TOKENS:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+      # Public Keys fuer SSH; mehrere durch ';' getrennt. Leer = sshd bleibt aus.
+      SSH_AUTHORIZED_KEYS: ${SSH_AUTHORIZED_KEYS:-}
+    volumes:
+      - claude-home:/home/dev/.claude
+      - buzz-home:/home/dev/.buzz
+      - workspace:/workspace
+      # Stabile Host-Schluessel ueber Redeploys hinweg.
+      - ssh-hostkeys:/etc/ssh/keys
+      # Crontabs von dev; ohne Volume nimmt jedes Deployment sie still mit.
+      - cron-spool:/var/spool/cron/crontabs
+      # VS Code installiert hier seine Serverkomponente bei der ersten Verbindung.
+      - vscode-server:/home/dev/.vscode-server
+      # Zed ebenso.
+      - zed-server:/home/dev/.zed_server
+      # Antigravity ebenso.
+      - antigravity-server:/home/dev/.antigravity-ide-server
+    restart: unless-stopped
+
+volumes:
+  cron-spool:
+  ssh-hostkeys:
+  antigravity-server:
+  zed-server:
+  vscode-server:
+  tailscale-state:
+  claude-home:
+  buzz-home:
+  workspace:

@@ -1,0 +1,32 @@
+# sshd fuer den Claude-Container.
+#
+# Die Bindung an 127.0.0.1 ist die Sicherheitszusicherung: sshd ist nur ueber
+# den Tailnet-Forwarder erreichbar, den tailscale serve einrichtet. Auf keinem
+# anderen Interface lauscht er, und der Container hat ohnehin keinen eigenen
+# Netzwerk-Stack.
+ListenAddress 127.0.0.1
+Port 22
+
+# Host-Schluessel liegen in einem Volume. Ohne das erzeugt jedes Redeploy neue
+# und der Client warnt jedes Mal vor einem gewechselten Host-Key - eine
+# Warnung, die sich abnutzt, bis man eine echte ignoriert.
+HostKey /etc/ssh/keys/ssh_host_ed25519_key
+
+# Nur Schluessel. Ein Passwort gaebe es hier ohnehin nicht.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+AllowUsers dev
+AuthorizedKeysFile /home/dev/.ssh/authorized_keys
+
+UsePAM no
+PrintMotd no
+AcceptEnv LANG LC_*
+
+# Die ENV-Zeilen des Images erreichen SSH-Sitzungen nicht - sshd baut die
+# Umgebung selbst auf. Ohne das schriebe claude per SSH wieder nach
+# ~/.claude.json, am Volume vorbei (siehe Dockerfile).
+SetEnv CLAUDE_CONFIG_DIR=/home/dev/.claude
+Subsystem sftp /usr/lib/openssh/sftp-server
+PidFile /run/sshd/sshd.pid

@@ -1,0 +1,7 @@
+.git
+docs
+test
+*.md
+.env
+.env.*
+!.env.example

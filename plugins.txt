@@ -1,0 +1,10 @@
+# Claude-Code-Plugins fuer das Terminal und jeden Agenten in diesem Container.
+#
+# Eine Zeile je Plugin:  <plugin>@<marketplace>  <quelle des marketplace>
+# Die Quelle ist ein GitHub-Repo (owner/name), eine URL oder ein Pfad.
+#
+# Der Entrypoint installiert beim Start ins Volume unter ~/.claude. Eine
+# gestrichene Zeile deinstalliert nichts - dafuer im Terminal
+# "claude plugin uninstall <plugin>@<marketplace>".
+
+superpowers@claude-plugins-official  anthropics/claude-plugins-official

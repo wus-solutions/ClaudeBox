@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Folgt dem Buzz-Agenten im Terminal.
+
+Der Agent laeuft ohne Terminal: supervisord startet buzz-acp, und das steuert
+claude-agent-acp ueber stdio. Jeder Turn landet aber als JSONL-Transkript in
+~/.claude/projects/. Dort liegen auch die eigenen Terminal-Sitzungen - die des
+Agenten erkennt man an "entrypoint": "sdk-ts".
+
+agent-watch zeigt die letzten Eintraege der neuesten Agenten-Session, folgt ihr
+live und wechselt, sobald der Agent in einer anderen Session schreibt. Gibt es
+noch keine, wartet es. Strg+C beendet.
+"""
+import collections
+import glob
+import json
+import os
+import sys
+import time
+
+PROJECTS = os.path.expanduser("~/.claude/projects")
+HISTORY = 40      # Eintraege, die beim Oeffnen einer Session nachgeholt werden
+POLL = 0.5        # Sekunden zwischen zwei Leseversuchen
+RESCAN = 2.0      # Sekunden zwischen zwei Suchen nach einer neueren Session
+
+_agent_sessions: dict[str, bool] = {}
+
+
+def is_agent_session(path: str) -> bool:
+    if path in _agent_sessions:
+        return _agent_sessions[path]
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                try:
+                    entrypoint = json.loads(line).get("entrypoint")
+                except ValueError:
+                    continue
+                if entrypoint:
+                    _agent_sessions[path] = entrypoint == "sdk-ts"
+                    return _agent_sessions[path]
+    except OSError:
+        pass
+    # Noch kein Eintrag mit entrypoint - beim naechsten Mal erneut ansehen.
+    return False
+
+
+def newest_agent_session() -> str | None:
+    candidates = []
+    for path in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")):
+        try:
+            candidates.append((os.path.getmtime(path), path))
+        except OSError:
+            continue
+    for _, path in sorted(candidates, reverse=True):
+        if is_agent_session(path):
+            return path
+    return None
+
+
+def short(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit] + " …"
+
+
+def show(line: str) -> None:
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        return
+    message = entry.get("message") or {}
+    content = message.get("content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    if not isinstance(content, list):
+        return
+    for block in content:
+        kind = block.get("type")
+        if kind == "text" and block.get("text", "").strip():
+            who = "Claude" if message.get("role") == "assistant" else "Eingang"
+            print(f"\n[{who}] {short(block['text'], 600)}")
+        elif kind == "tool_use":
+            args = block.get("input") or {}
+            arg = next((args[k] for k in ("command", "file_path", "pattern", "url", "skill")
+                        if args.get(k)), None) or json.dumps(args, ensure_ascii=False)
+            print(f"  -> {block.get('name')}: {short(arg, 160)}")
+        elif kind == "tool_result":
+            print("     Fehler" if block.get("is_error") else "     ok")
+
+
+def main() -> int:
+    current, fh, partial = None, None, ""
+    last_scan = 0.0
+    waiting = False
+    while True:
+        if time.monotonic() - last_scan >= RESCAN or fh is None:
+            last_scan = time.monotonic()
+            newest = newest_agent_session()
+            if newest and newest != current:
+                if fh:
+                    fh.close()
+                current, partial = newest, ""
+                fh = open(current, errors="replace")
+                print(f"\n=== Session {os.path.basename(current)} ===")
+                lines = fh.readlines()
+                if lines and not lines[-1].endswith("\n"):
+                    partial = lines.pop()
+                for line in collections.deque(lines, maxlen=HISTORY):
+                    show(line)
+                waiting = False
+            elif not newest and not waiting:
+                print("Warte auf die erste Agenten-Session ...")
+                waiting = True
+            sys.stdout.flush()
+
+        chunk = fh.readline() if fh else ""
+        if not chunk:
+            time.sleep(POLL)
+            continue
+        partial += chunk
+        if partial.endswith("\n"):
+            show(partial)
+            partial = ""
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)

@@ -1,0 +1,46 @@
+# Zusaetzliche apt-Pakete fuer diesen Container. Eine Zeile je Paket,
+# Kommentare mit # und Leerzeilen sind erlaubt.
+#
+# Was der Container selbst braucht - tmux, ttyd, supervisor, openssh-server,
+# git, ripgrep, wget -, steht im Dockerfile. Hierher kommt, was DU oder der
+# Agent zusaetzlich braucht. Nach einer Aenderung baut das naechste Deployment
+# das Image neu; die Schicht liegt am Ende des Dockerfiles, der Rest bleibt im
+# Cache.
+#
+# test/image.sh prueft jede Zeile am fertigen Image.
+#
+# Nicht ueber diese Liste zu bekommen: gh (eigene apt-Quelle) und uv
+# (Installer-Skript). Beides waere eine Zeile im Dockerfile.
+
+# --- Dienste ---
+# Der Entrypoint startet cron automatisch, sobald das Paket hier steht.
+# Crontabs von dev liegen im Volume cron-spool und ueberleben Redeploys.
+cron
+# Ohne tzdata laeuft der Container in UTC - ein Crontab auf 8 Uhr feuerte dann
+# um 10. Die Zone selbst setzt TZ in docker-compose.yml.
+tzdata
+
+# --- Werkzeuge fuer den Agenten ---
+jq
+# poppler-utils bringt pdftotext - PDFs lesbar machen, statt sie zu erraten.
+poppler-utils
+unzip
+rsync
+git-lfs
+sqlite3
+
+# --- Netzwerk-Diagnose im Container ---
+# bind9-dnsutils bringt dig, netcat-openbsd bringt nc. "dnsutils" waere in
+# Trixie nur ein Platzhalter-Name - apt installiert ihn, dpkg kennt ihn nicht.
+iputils-ping
+bind9-dnsutils
+netcat-openbsd
+
+# --- Toolchains: PHP/Laravel, Python, Medien ---
+# ffmpeg ist das groesste Paket dieser Liste (mehrere hundert MB).
+php-cli
+composer
+python3-pip
+python3-venv
+imagemagick
+ffmpeg

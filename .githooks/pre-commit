@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Verhindert, dass Geheimnisse versehentlich in einen Commit geraten.
+#
+# Anlass: ein echter GitHub-Token landete in .env.example, weil dort ein Wert
+# eingetragen wurde statt in .env - und .env.example ist absichtlich nicht
+# gitignored, weil sie die Vorlage ist. Es gab also keine Schutzschicht.
+set -uo pipefail
+
+FAIL=0
+red() { printf '\033[31m%s\033[0m\n' "$1" >&2; }
+
+# Regel 1: In .env.example duerfen Geheimnis-Variablen keinen Wert haben.
+if git diff --cached --name-only | grep -qx '.env.example'; then
+  BAD=$(git show :.env.example \
+    | grep -nE '^[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|AUTHKEY)[A-Z_]*=.+' \
+    | grep -vE '=\s*$' || true)
+  if [[ -n "$BAD" ]]; then
+    red "pre-commit: .env.example enthaelt belegte Geheimnis-Variablen."
+    red "Werte gehoeren in .env (gitignored), nicht in die Vorlage:"
+    sed 's/=.*/=<WERT ENTFERNT>/' <<<"$BAD" | sed 's/^/  /' >&2
+    FAIL=1
+  fi
+fi
+
+# Regel 2: erkennbare Secret-Formate irgendwo im Commit.
+# Die Laengenschwellen liegen bewusst ueber den Platzhaltern in den Tests.
+PATTERNS='github_pat_[A-Za-z0-9_]{50,}|ghp_[A-Za-z0-9]{36}|tskey-auth-[A-Za-z0-9]{20,}|nsec1[a-z0-9]{50,}'
+HITS=$(git diff --cached -U0 | grep -E "^\+" | grep -nE "$PATTERNS" || true)
+if [[ -n "$HITS" ]]; then
+  red "pre-commit: der Commit enthaelt etwas, das wie ein echtes Secret aussieht."
+  sed -E "s/($PATTERNS)/<SECRET ENTFERNT>/g" <<<"$HITS" | head -5 | sed 's/^/  /' >&2
+  FAIL=1
+fi
+
+if [[ $FAIL -ne 0 ]]; then
+  red ""
+  red "Commit abgebrochen. Mit --no-verify erzwingbar - aber ueberleg zweimal."
+  exit 1
+fi

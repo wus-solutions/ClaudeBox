@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "claude-box — Tailscale, Buzz und Claude Code",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "human-access", "label": "Zugang für Menschen", "focus": ["owner", "ts", "ttyd", "sshd", "claude"], "note": "Wie ein Mensch an Web-Terminal und IDE kommt, ohne dass ein Port veröffentlicht ist." },
+      { "id": "agent-path", "label": "Weg des Agenten", "focus": ["relay", "buzzacp", "claude"], "note": "Wie aus einer Buzz-Erwähnung ein Turn in Claude Code wird." },
+      { "id": "state-egress", "label": "Zustand und Egress", "focus": ["claude", "volumes", "github", "anthropic"], "note": "Was ein Redeploy überlebt und wohin der Container hinausgreift." }
+    ]
+  },
+  "components": [
+    { "id": "owner", "type": "external", "label": "Eigene Geräte", "sublabel": "Browser · VS Code · Zed", "pos": [40, 300], "size": [160, 76] },
+    { "id": "relay", "type": "messagebus", "label": "Buzz-Relay", "sublabel": "Nostr über WSS", "pos": [40, 470], "size": [160, 68] },
+    { "id": "ts", "type": "cloud", "label": "tailscale-Sidecar", "sublabel": "containerboot · Userspace", "tag": "besitzt den Namespace", "pos": [290, 300], "size": [175, 80] },
+    { "id": "ttyd", "type": "frontend", "label": "ttyd + tmux", "sublabel": "lauscht auf 127.0.0.1:7681", "pos": [580, 120], "size": [175, 68] },
+    { "id": "sshd", "type": "frontend", "label": "sshd", "sublabel": "lauscht auf 127.0.0.1:22", "pos": [580, 250], "size": [175, 68] },
+    { "id": "buzzacp", "type": "backend", "label": "buzz-acp", "sublabel": "startet claude-agent-acp", "pos": [580, 470], "size": [175, 68] },
+    { "id": "claude", "type": "backend", "label": "Claude Code", "sublabel": "arbeitet in /workspace", "pos": [860, 300], "size": [180, 84] },
+    { "id": "volumes", "type": "database", "label": "Named Volumes", "sublabel": "Login · Identität · Workspace", "pos": [860, 470], "size": [180, 68] },
+    { "id": "github", "type": "external", "label": "GitHub", "sublabel": "Token aus der Umgebung", "pos": [1130, 180], "size": [160, 68] },
+    { "id": "anthropic", "type": "external", "label": "Anthropic API", "sublabel": "Pro/Max-OAuth, kein API-Key", "pos": [1130, 400], "size": [160, 68] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "Gemeinsamer Netzwerk-Namespace — kein ports:-Block auf dem Host", "wraps": ["ts", "ttyd", "sshd", "buzzacp", "claude", "volumes"], "pad": 48 },
+    { "kind": "region", "label": "claude-Container — alles läuft als dev (uid 1000)", "wraps": ["ttyd", "sshd", "buzzacp", "claude", "volumes"], "pad": 22 }
+  ],
+  "connections": [
+    { "id": "owner-to-tailnet", "from": "owner", "to": "ts", "label": "HTTPS · SSH", "variant": "emphasis" },
+    { "id": "serve-to-ttyd", "from": "ts", "to": "ttyd", "label": "serve-Proxy", "variant": "emphasis", "fromSide": "top", "toSide": "left" },
+    { "id": "serve-to-sshd", "from": "ts", "to": "sshd", "label": "TCP-Forward", "fromSide": "right", "toSide": "left" },
+    { "id": "dial-out", "from": "buzzacp", "to": "relay", "label": "ausgehendes WSS, nichts lauscht", "variant": "emphasis" },
+    { "id": "agent-turn", "from": "buzzacp", "to": "claude", "label": "ACP über stdio", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "interactive-turn", "from": "ttyd", "to": "claude", "label": "interaktive Sitzung", "fromSide": "right", "toSide": "top" },
+    { "id": "shared-state", "from": "claude", "to": "volumes", "label": "geteilter Login + Config", "fromSide": "bottom", "toSide": "top", "labelDy": 45 },
+    { "id": "git-over-https", "from": "claude", "to": "github", "label": "clone · push" },
+    { "id": "claude-auth", "from": "claude", "to": "anthropic", "label": "OAuth-Login" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Zugang", "items": ["tailscale serve terminiert TLS mit dem Zertifikat des Nodes", "SSH ist ein TCP-Forward auf 127.0.0.1:22, nie ein Host-Port", "Kein Passwort — die Grenze ist Tailnet-Mitgliedschaft plus ACL"] },
+    { "dot": "emerald", "title": "Agenten-Schleife", "items": ["buzz-acp verbindet sich ausgehend und braucht keinen eingehenden Port", "owner-only heißt: nur ein einzelner Pubkey löst einen Turn aus", "Ein weiterer Agent ist eine Datei in agents/ plus ein Key in BUZZ_AGENTS"] },
+    { "dot": "rose", "title": "Isolation", "items": ["Kein ports:-Block und nirgends docker.sock im Stack", "claude hat keinen eigenen Netzwerk-Stack — er tritt dem des Sidecars bei", "Egress läuft weiter durch diesen Namespace; begrenzt ist nur Eingehendes"] }
+  ]
+}

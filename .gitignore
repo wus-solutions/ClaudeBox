@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+*.deb
+
+# Belege aus `archify visual-check` - Screenshots und Receipts, keine Artefakte.
+docs/*.visual-check.*
