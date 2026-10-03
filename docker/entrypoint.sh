@@ -169,6 +169,33 @@ else
   echo "         Das Web-Terminal ist davon nicht betroffen." >&2
 fi
 
+# Systemzeitzone setzen. TZ als Variable reicht nicht: sie wirkt nur in
+# Prozessen, die die Umgebung erben. cron plant nach der Systemzeitzone und
+# startet seine Jobs mit LEERER Umgebung - ohne das feuerte "0 8 * * *" um
+# 8 Uhr UTC, also um 10 Uhr in Berlin, waehrend im Terminal alles richtig aussah.
+# Braucht tzdata aus packages.txt; fehlt die Zone, bleibt es bei UTC.
+#
+# Dieselbe leere Umgebung kostet einem Cron-Job auch CLAUDE_CONFIG_DIR - "claude
+# -p" aus einem Crontab suchte die Anmeldung dann neben dem Volume und faende
+# keine. Ueber /etc/environment kommen beide an: cron laedt die Datei per
+# pam_env. PATH bleibt davon unberuehrt, den setzt cron selbst auf
+# /usr/bin:/bin - Jobs brauchen fuer claude oder buzz eine eigene PATH-Zeile
+# im Crontab oder absolute Pfade.
+CLAUDE_CFG="${CLAUDE_CONFIG_DIR:-/home/dev/.claude}"
+sed -i '/^CLAUDE_CONFIG_DIR=/d; /^TZ=/d' /etc/environment 2>/dev/null || touch /etc/environment
+printf 'CLAUDE_CONFIG_DIR=%s\n' "$CLAUDE_CFG" >> /etc/environment
+
+if [[ -n "${TZ:-}" ]]; then
+  if [[ -f "/usr/share/zoneinfo/$TZ" ]]; then
+    ln -sfn "/usr/share/zoneinfo/$TZ" /etc/localtime
+    printf '%s\n' "$TZ" > /etc/timezone
+    printf 'TZ=%s\n' "$TZ" >> /etc/environment
+  else
+    echo "WARNUNG: Zeitzone '$TZ' nicht gefunden - alles laeuft in UTC." >&2
+    echo "         tzdata fehlt in packages.txt oder der Name ist falsch." >&2
+  fi
+fi
+
 # cron, aber nur wenn das Paket in packages.txt steht. Ohne laufenden Dienst
 # feuert kein Crontab, und ein Eintrag, der nie ausgefuehrt wird, faellt lange
 # nicht auf.
@@ -261,6 +288,45 @@ fi
 if [[ -n "${BUZZ_AUTH_TAGS:-}" && -z "${BUZZ_ACP_AGENT_OWNER:-}" ]]; then
   echo "WARNUNG: BUZZ_AUTH_TAGS ist gesetzt, BUZZ_ACP_AGENT_OWNER aber leer." >&2
   echo "         Ohne Owner-Pubkey entsteht kein Tag - die Agenten laufen ohne." >&2
+fi
+
+# Optional: Zugangsdaten je Agent fuer Cron-Jobs ablegen. Cron startet Jobs mit
+# leerer Umgebung, ohne BUZZ_*-Variablen scheitert "buzz messages send" still.
+#
+# Bewusst ein Schalter und kein Default: Damit liegt der Schluessel lesbar im
+# Dateisystem, und das widerspricht der Zusicherung aus dem README, dass
+# Geheimnisse nur in der Prozessumgebung stehen. Unter /run/buzz, weil
+# docker-compose.yml dort ein tmpfs einhaengt - RAM statt Platte. Das
+# Verzeichnis bekommt 0750 root:dev, nicht nur die Datei: ein tmpfs kommt
+# standardmaessig mit 1777.
+#
+# Format: schlichte KEY=wert-Zeilen ohne export, damit ein Job sie mit
+#   set -a; . /run/buzz/<name>.env; set +a
+# in einem Schritt laedt.
+if [[ -n "${CRON_SECRETS:-}" && "${CRON_SECRETS}" != "0" && "${CRON_SECRETS}" != "false" ]]; then
+  if [[ ${#names[@]} -gt 0 ]]; then
+    install -d -m 0750 -o root -g dev /run/buzz
+    for name in "${names[@]}"; do
+      suffix="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9_' '_')"
+      var="BUZZ_AGENT_KEY_$suffix"
+      sigvar="BUZZ_AUTH_SIG_$suffix"
+      umask 027
+      {
+        printf 'BUZZ_RELAY_URL=%s\n' "${BUZZ_RELAY_URL:-}"
+        printf 'BUZZ_PRIVATE_KEY=%s\n' "${!var:-}"
+        # In einfachen Anfuehrungszeichen, damit "set -a; . datei" die
+        # doppelten im JSON nicht wegwirft.
+        if [[ -n "${!sigvar:-}" && -n "${BUZZ_ACP_AGENT_OWNER:-}" ]]; then
+          printf "BUZZ_AUTH_TAG='[\"auth\",\"%s\",\"\",\"%s\"]'\n" \
+            "$BUZZ_ACP_AGENT_OWNER" "${!sigvar}"
+        fi
+      } > "/run/buzz/$name.env"
+      umask 022
+      chown root:dev "/run/buzz/$name.env"
+      chmod 0640 "/run/buzz/$name.env"
+    done
+    echo "CRON_SECRETS: Zugangsdaten unter /run/buzz/<agent>.env (tmpfs, 0640 root:dev)." >&2
+  fi
 fi
 
 if [[ ${#names[@]} -eq 0 ]]; then

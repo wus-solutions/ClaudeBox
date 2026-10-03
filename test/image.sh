@@ -611,17 +611,41 @@ check "composer ist da" "Composer" run bash -c 'composer --version 2>&1'
 # Ein Crontab ohne laufenden Dienst feuert nie. Der Entrypoint richtet cron nur
 # ein, wenn das Paket in packages.txt steht - deshalb hier der Beweis am
 # laufenden Container, nicht an einer Konfigurationsdatei.
-CID=$(spawn --platform "$PLATFORM" -e GIT_USER_NAME=x -e GIT_USER_EMAIL=x@x "$IMAGE")
+CID=$(spawn --platform "$PLATFORM" -e TZ=Europe/Berlin -e GIT_USER_NAME=x -e GIT_USER_EMAIL=x@x "$IMAGE")
 for _ in $(seq 1 60); do
   docker exec "$CID" supervisorctl status cron 2>/dev/null | grep -q RUNNING && break
   sleep 1
 done
+
+# Erst hinter dem Warten: der Entrypoint setzt die Zeitzone beim Start, und
+# direkt nach "docker run" ist er noch nicht dort angekommen.
+#
+# TZ allein reicht fuer cron NICHT: cron plant nach der Systemzeitzone und
+# startet seine Jobs mit leerer Umgebung. Ohne gesetzte Systemzeitzone feuerte
+# "0 8 * * *" um 8 Uhr UTC, also um 10 Uhr in Berlin - und im Terminal sahe
+# trotzdem alles richtig aus, weil dort TZ greift.
+check "Systemzeitzone ist gesetzt" "Europe/Berlin" \
+  docker exec "$CID" cat /etc/timezone
+SYSZONE=$(docker exec "$CID" env -i /bin/date +%Z 2>&1)
+if [[ -n "$SYSZONE" && "$SYSZONE" != *UTC* ]]; then
+  pass "auch mit leerer Umgebung gilt die lokale Zeit ($SYSZONE) - so startet cron"
+else
+  fail "mit leerer Umgebung bleibt es UTC ($SYSZONE) - Crontabs feuern zur falschen Stunde"
+fi
+
+# Der Buzz-Schluessel darf NICHT in /etc/environment landen: die Datei ist fuer
+# jeden lesbar und liegt im Container-Dateisystem.
+if docker exec "$CID" grep -qE 'BUZZ_(PRIVATE_KEY|AGENT_KEY)' /etc/environment 2>/dev/null; then
+  fail "ein Buzz-Schluessel steht in /etc/environment (fuer alle lesbar)"
+else
+  pass "kein Buzz-Schluessel in /etc/environment"
+fi
 check "cron laeuft als Dienst" "RUNNING" docker exec "$CID" supervisorctl status cron
 
 # Der Agent legt seine Crontabs als dev an. Ohne die richtigen Rechte auf
 # /var/spool/cron/crontabs meldet crontab nur "must be suid to work properly".
 docker exec --user dev "$CID" bash -c \
-  'printf "* * * * * touch /tmp/cron-lief\n" | crontab -' >/dev/null 2>&1
+  'printf "* * * * * env > /tmp/cron-lief 2>&1\n" | crontab -' >/dev/null 2>&1
 check "dev kann einen Crontab anlegen" "cron-lief" \
   docker exec --user dev "$CID" crontab -l
 
@@ -638,6 +662,49 @@ else
   fail "der Crontab von dev feuert nicht"
   docker exec "$CID" supervisorctl status cron 2>&1 | sed 's/^/       /'
 fi
+
+# Der Job hat seine Umgebung mitgeschrieben. Ohne CLAUDE_CONFIG_DIR suchte
+# "claude -p" aus einem Crontab die Anmeldung neben dem Volume.
+check "Cron-Job kennt CLAUDE_CONFIG_DIR" "CLAUDE_CONFIG_DIR=/home/dev/.claude" \
+  docker exec "$CID" cat /tmp/cron-lief
+check "Cron-Job kennt die Zeitzone" "TZ=Europe/Berlin" \
+  docker exec "$CID" cat /tmp/cron-lief
+
+# Ohne Schalter liegt kein Schluessel im Dateisystem - das ist der Default.
+if docker exec "$CID" test -e /run/buzz/tuatara.env 2>/dev/null; then
+  fail "/run/buzz enthaelt eine Schluesseldatei, obwohl CRON_SECRETS nicht gesetzt ist"
+else
+  pass "ohne CRON_SECRETS legt der Container keine Schluesseldatei an"
+fi
+docker rm -f "$CID" >/dev/null
+
+# Mit Schalter: Zugangsdaten je Agent unter /run/buzz, nur fuer root und dev
+# lesbar - und zwar auch ueber das Verzeichnis, nicht nur ueber die Datei. Ein
+# compose-tmpfs kaeme sonst mit 1777. Die Datei traegt schlichte KEY=wert-Zeilen
+# ohne export, damit ein Job sie mit "set -a; . <datei>" laedt.
+SID2=$(spawn --platform "$PLATFORM" --tmpfs /run/buzz -e CRON_SECRETS=1 -e TZ=Europe/Berlin \
+         -e BUZZ_AGENTS="probe=nsec1TESTSCHLUESSEL" -e BUZZ_RELAY_URL=wss://relay.test \
+         -e BUZZ_ACP_AGENT_OWNER=owner "$IMAGE")
+for _ in $(seq 1 60); do
+  docker exec "$SID2" test -f /run/buzz/probe.env 2>/dev/null && break
+  sleep 1
+done
+check "mit CRON_SECRETS liegt die Agenten-Umgebung unter /run/buzz" "nsec1TESTSCHLUESSEL" \
+  docker exec "$SID2" cat /run/buzz/probe.env
+check "nur root und dev duerfen die Datei lesen" "640 root dev" \
+  docker exec "$SID2" stat -c '%a %U %G' /run/buzz/probe.env
+check "und auch das Verzeichnis ist zu" "750 root dev" \
+  docker exec "$SID2" stat -c '%a %U %G' /run/buzz
+check "dev kann sie sourcen" "RELAY=wss://relay.test" \
+  docker exec --user dev "$SID2" bash -c 'set -a; . /run/buzz/probe.env; set +a; echo "RELAY=$BUZZ_RELAY_URL"'
+# Gegenprobe: ein Fremder im Container kommt nicht heran.
+docker exec "$SID2" useradd -m fremd >/dev/null 2>&1
+if docker exec --user fremd "$SID2" cat /run/buzz/probe.env >/dev/null 2>&1; then
+  fail "ein fremder Benutzer im Container kann den Schluessel lesen"
+else
+  pass "ein fremder Benutzer im Container kommt nicht heran"
+fi
+docker rm -f "$SID2" >/dev/null
 docker rm -f "$CID" >/dev/null
 
 echo

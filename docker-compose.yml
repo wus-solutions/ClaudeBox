@@ -60,6 +60,9 @@ services:
       #   BUZZ_AUTH_TAGS=agentname=<signatur>,zweiter=<signatur>
       # Leer = die Agenten laufen, gelten fuer Buzz aber nicht als Agenten.
       BUZZ_AUTH_TAGS: ${BUZZ_AUTH_TAGS:-}
+      # Gesetzt = der Entrypoint legt die Buzz-Zugangsdaten je Agent unter
+      # /run/buzz ab, damit Cron-Jobs ueber buzz schreiben koennen. Leer = nicht.
+      CRON_SECRETS: ${CRON_SECRETS:-}
       # Optional. Ohne diese Zeilen greifen die leeren Defaults aus dem Image,
       # und der Credential-Helper sieht nie einen Token.
       GITHUB_TOKENS: ${GITHUB_TOKENS:-}
@@ -68,6 +71,11 @@ services:
       GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
       # Public Keys fuer SSH; mehrere durch ';' getrennt. Leer = sshd bleibt aus.
       SSH_AUTHORIZED_KEYS: ${SSH_AUTHORIZED_KEYS:-}
+    # Nur RAM: /run ist im Container sonst das Overlay-Dateisystem, der
+    # Schluessel aus CRON_SECRETS laege also doch geschrieben auf der Platte.
+    # Die Rechte (0750 root:dev) setzt der Entrypoint, ein tmpfs kaeme mit 1777.
+    tmpfs:
+      - /run/buzz
     volumes:
       - claude-home:/home/dev/.claude
       - buzz-home:/home/dev/.buzz

@@ -397,6 +397,56 @@ container log, because `cron` runs in the foreground.
 8 a.m. would fire at 10 in summer. `test/compose.sh` checks that `TZ` is set,
 `test/image.sh` that the zone resolves in the image.
 
+`TZ` alone is not enough for that, though: it only takes effect in processes
+that inherit the environment. **cron schedules by the system timezone**, and in
+the image that was UTC. The entrypoint therefore sets `/etc/localtime` and
+`/etc/timezone` from `TZ`. Before that, everything looked right in the terminal
+while crontabs fired two hours off — exactly the kind of bug you notice weeks
+later.
+
+#### What a cron job sees — and what it does not
+
+cron starts jobs with an **empty environment**. That is the most common reason
+for jobs that silently do nothing:
+
+| | There? | Where from |
+|---|---|---|
+| `TZ`, `CLAUDE_CONFIG_DIR` | yes | The entrypoint writes them to `/etc/environment`, which cron reads via `pam_env`. |
+| `PATH` | only `/usr/bin:/bin` | cron sets it itself. `claude`, `buzz` and `agent-watch` live in `/usr/local/bin` — so use absolute paths or put a `PATH=` line at the top of the crontab. |
+| `BUZZ_*`, `GITHUB_*` | **no** | Secrets only exist in supervisord's process environment. A job that needs them has to be given them. |
+
+For the last point there is a switch. `CRON_SECRETS=1` makes the entrypoint
+write one file per agent:
+
+```
+/run/buzz/<agent>.env      # 0640 root:dev, directory 0750 root:dev
+BUZZ_RELAY_URL=…
+BUZZ_PRIVATE_KEY=…
+BUZZ_AUTH_TAG=…            # only with an entry in BUZZ_AUTH_TAGS
+```
+
+Load it in the job with `set -a; . /run/buzz/<agent>.env; set +a`. `/run/buzz`
+is pure RAM via `tmpfs` in `docker-compose.yml` — without that entry `/run`
+would be the overlay filesystem, so the key would sit written on disk. The
+entrypoint sets the permissions, because a `tmpfs` would otherwise arrive as
+`1777`.
+
+**This is deliberately a switch and not a default.** With it, the key sits
+readable in the container's filesystem, which departs from the promise under
+*Security* that secrets only live in the process environment. Without the
+switch the file does not exist; `test/image.sh` checks both directions,
+including the counter-test that a third user in the container cannot reach it.
+
+Not into `/etc/environment` — that file is readable by everyone. Only `TZ` and
+`CLAUDE_CONFIG_DIR` go there, and a test pins that down.
+
+**Limit:** a cron job can send messages, but it cannot wake the agent — a
+message from the agent to itself triggers nothing. For work on a schedule
+("write the report every Monday") the job has to start its own Claude session,
+e.g. `claude -p '<task>'`. `CLAUDE_CONFIG_DIR` in `/etc/environment` is the
+prerequisite for that, otherwise Claude would not find the login in the volume.
+**Untested.**
+
 ## Access
 
 ```
