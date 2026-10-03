@@ -147,16 +147,41 @@ instead of `~/.claude.json`. They serve **both** consumers — the terminal and 
 Buzz agent. No `ANTHROPIC_API_KEY` is needed; `buzz-acp` reports `apiType=native`
 in its log.
 
-### 5. Agent profile
+### 5. Agent profile and owner attestation
 
-Without a profile, Buzz shows a name derived from the pubkey:
+Buzz treats an identity as an agent only once two owner-backed events exist,
+and the order is not optional:
+
+1. **`kind:0` carrying a NIP-OA `auth` tag** — the *marker*. The agent signs
+   the profile, the owner signs the tag inside it. From here on the identity
+   counts as an agent.
+2. **`kind:30177`, `d` tag = agent pubkey** — the *admission*, signed by the
+   owner. Only this produces a directory entry, and Buzz accepts the
+   coordinate only when its author is the owner attested in the `kind:0`.
+
+With just the first one the identity is marked but listed nowhere — and then
+every picker filters it out, as an agent and as a person alike. It is still
+reachable by direct message, and nowhere else.
+
+One call does both. It runs on the host, never in the container, because both
+private keys are needed:
 
 ```bash
-docker compose exec claude buzz users set-profile \
-  --name "Tuatara" --about "…"
+tools/enroll-agent.py --agent-name <name> --dry-run    # look first
+tools/enroll-agent.py --agent-name <name> --write-env  # then publish
 ```
 
-This is a one-off step per identity and deliberately does not live in the image.
+It reads the owner key from `BUZZ_OWNER_KEY`, the agent key from
+`BUZZ_AGENTS`, the relay from `BUZZ_RELAY_URL`, and `respond_to`,
+`respond_to_allowlist` and `parallelism` from the front matter of
+`agents/<name>.md`. An existing profile is fetched first, so `about` and
+`picture` survive.
+
+`--write-env` also records `BUZZ_AUTH_TAGS=<name>=<signature>`. The running
+agent needs that so its *later* events carry the tag as well — run
+`docker compose up -d` once afterwards.
+
+Verification steps and pitfalls: [`tools/README.md`](tools/README.md).
 
 ### 6. GitHub access (optional)
 

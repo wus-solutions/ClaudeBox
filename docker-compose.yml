@@ -56,6 +56,10 @@ services:
       BUZZ_PRIVATE_KEY: ${BUZZ_PRIVATE_KEY:-}
       BUZZ_AGENTS: ${BUZZ_AGENTS:-}
       BUZZ_ACP_AGENT_OWNER: ${BUZZ_ACP_AGENT_OWNER:?BUZZ_ACP_AGENT_OWNER fehlt in .env}
+      # Owner-Attestierung je Agent (NIP-OA), Format wie GITHUB_TOKENS:
+      #   BUZZ_AUTH_TAGS=agentname=<signatur>,zweiter=<signatur>
+      # Leer = die Agenten laufen, gelten fuer Buzz aber nicht als Agenten.
+      BUZZ_AUTH_TAGS: ${BUZZ_AUTH_TAGS:-}
       # Optional. Ohne diese Zeilen greifen die leeren Defaults aus dem Image,
       # und der Credential-Helper sieht nie einen Token.
       GITHUB_TOKENS: ${GITHUB_TOKENS:-}

@@ -57,7 +57,11 @@ mirror_skills() {  # mirror_skills <quelle> <ziel> <bezeichnung>
   fi
 }
 
-mirror_skills /opt/buzz-skills /home/dev/.buzz/.agents/skills "Buzz-Skills"
+# Beide Quellen landen im selben Ziel: die buzz-cli-Skill ist fuer den Agenten
+# eine Claude-Skill wie jede andere. buzz-acp reicht --skill nur an buzz-pi-acp
+# durch, nicht an claude-agent-acp - unter ~/.buzz/.agents/skills wuerde sie
+# niemand lesen.
+mirror_skills /opt/buzz-skills "${SKILLS_DEST:-/home/dev/.claude/skills}" "Buzz-Skills"
 mirror_skills "${SKILLS_SRC:-/opt/skills}" "${SKILLS_DEST:-/home/dev/.claude/skills}" "Claude-Skills"
 chown -R dev:dev /home/dev/.buzz/.agents 2>/dev/null || true
 
@@ -213,6 +217,50 @@ elif [[ -n "${BUZZ_PRIVATE_KEY:-}" ]]; then
   # Rueckwaertskompatibel: eine einzelne Identitaet ohne BUZZ_AGENTS.
   export BUZZ_AGENT_KEY_DEFAULT="$BUZZ_PRIVATE_KEY"
   names+=("default")
+fi
+
+# Owner-Attestierung je Agent (NIP-OA). Ohne sie ist ein Agent fuer Buzz ein
+# gewoehnliches Konto: er steht nicht im Agentenverzeichnis der Desktop-App,
+# und eine @-Mention zieht ihn nicht in einen Huddle.
+#
+# Format wie bei GITHUB_TOKENS, ein Eintrag je Agent:
+#   BUZZ_AUTH_TAGS=agentname=<signatur>,zweiter=<signatur>
+# Der Wert ist nur die Signatur des Owners ueber den Pubkey des Agenten - das
+# ganze Tag baut buzz-acp-launch daraus. Erzeugt wird sie auf dem Host mit
+#   tools/enroll-agent.py --agent-name <name>
+if [[ -n "${BUZZ_AUTH_TAGS:-}" && ${#names[@]} -gt 0 ]]; then
+  IFS=',' read -ra entries <<<"$BUZZ_AUTH_TAGS"
+  for entry in "${entries[@]}"; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    name="${entry%%=*}"
+    sig="${entry#*=}"
+    if [[ -z "$name" || "$name" == "$entry" || -z "$sig" ]]; then
+      echo "WARNUNG: BUZZ_AUTH_TAGS-Eintrag ohne 'name=signatur' uebersprungen." >&2
+      continue
+    fi
+    # Eine kaputte Signatur haengt sonst als ungueltiges Tag an jedem Event.
+    if [[ ! "$sig" =~ ^[0-9a-fA-F]{128}$ ]]; then
+      echo "WARNUNG: Signatur fuer '$name' sind keine 128 Hex-Zeichen - uebersprungen." >&2
+      continue
+    fi
+    known=0
+    for agent in "${names[@]}"; do
+      if [[ "$agent" == "$name" ]]; then
+        known=1
+      fi
+    done
+    if [[ "$known" -eq 0 ]]; then
+      echo "WARNUNG: BUZZ_AUTH_TAGS nennt '$name' - BUZZ_AGENTS kennt den nicht." >&2
+      continue
+    fi
+    var="BUZZ_AUTH_SIG_$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9_' '_')"
+    export "$var=$sig"
+  done
+fi
+
+if [[ -n "${BUZZ_AUTH_TAGS:-}" && -z "${BUZZ_ACP_AGENT_OWNER:-}" ]]; then
+  echo "WARNUNG: BUZZ_AUTH_TAGS ist gesetzt, BUZZ_ACP_AGENT_OWNER aber leer." >&2
+  echo "         Ohne Owner-Pubkey entsteht kein Tag - die Agenten laufen ohne." >&2
 fi
 
 if [[ ${#names[@]} -eq 0 ]]; then

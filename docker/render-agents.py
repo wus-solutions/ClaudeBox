@@ -76,6 +76,10 @@ def key_var(name: str) -> str:
     return "BUZZ_AGENT_KEY_" + re.sub(r"[^A-Z0-9_]", "_", name.upper())
 
 
+def sig_var(name: str) -> str:
+    return "BUZZ_AUTH_SIG_" + re.sub(r"[^A-Z0-9_]", "_", name.upper())
+
+
 def render(name: str) -> int:
     """Schreibt die Konfiguration eines Agenten. Gibt die Worker-Zahl zurueck."""
     path = AGENTS_DIR / f"{name}.md"
@@ -94,6 +98,11 @@ def render(name: str) -> int:
         f'BUZZ_PRIVATE_KEY="%(ENV_{key_var(name)})s"',
         'BUZZ_RELAY_URL="%(ENV_BUZZ_RELAY_URL)s"',
         'BUZZ_ACP_AGENT_OWNER="%(ENV_BUZZ_ACP_AGENT_OWNER)s"',
+        # Nur der NAME der Variablen, nicht ihr Wert. Zwei Gruende:
+        # supervisord trennt diese Liste an Kommas (das Tag ist JSON, hat also
+        # welche), und eine fehlende %(ENV_...)s-Referenz laesst supervisord das
+        # Programm gar nicht starten. Den Wert holt buzz-acp-launch selbst.
+        f'BUZZ_AUTH_SIG_VAR="{sig_var(name)}"',
         'GITHUB_TOKENS="%(ENV_GITHUB_TOKENS)s"',
         'GITHUB_TOKEN="%(ENV_GITHUB_TOKEN)s"',
     ]
@@ -122,7 +131,7 @@ def render(name: str) -> int:
     (CONF_DIR / f"agent-{name}.conf").write_text(
         f"""; Erzeugt von render-agents.py aus {path.name}. Nicht von Hand aendern.
 [program:buzz-acp-{name}]
-command=/usr/local/bin/buzz-acp --agent-command claude-agent-acp --agent-args ""
+command=/usr/local/bin/buzz-acp-launch --agent-command claude-agent-acp --agent-args ""
 user=dev
 directory=/workspace
 environment={",\n    ".join(env)}

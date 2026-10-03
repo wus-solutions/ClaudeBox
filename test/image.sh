@@ -20,6 +20,17 @@ trap cleanup EXIT INT TERM
 # Startet einen Container detached und merkt ihn sich fuer das Aufraeumen.
 spawn() { local id; id=$(docker run -d "$@"); CONTAINERS+=("$id"); printf '%s' "$id"; }
 
+# Loescht ein Testverzeichnis. Der Umweg ueber den Container ist noetig, weil
+# mirror_skills das Ziel auf dev (uid 1000) chownt: auf einem CI-Runner mit
+# anderer uid scheitert ein blankes rm mit "Permission denied", und diese
+# Zeilen verdecken im Log echte Fehler.
+scrub() {  # scrub <verzeichnis>
+  [[ -d "$1" ]] || return 0
+  docker run --rm --platform "$PLATFORM" --entrypoint "" -v "$1:/scrub" "$IMAGE" \
+    find /scrub -mindepth 1 -delete >/dev/null 2>&1 || true
+  rm -rf "$1" 2>/dev/null || true
+}
+
 pass() { printf '  \033[32mok\033[0m   %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
 
@@ -314,7 +325,7 @@ check "Skill aus dem Image landet im Ziel" "aus-dem-repo" echo "$SOUT"
 check "Laufzeit-Skill wird nicht geloescht" "nur-laufzeit" echo "$SOUT"
 check "bei Namensgleichheit gewinnt das Image" "REPO-FASSUNG" echo "$SOUT"
 check "die Spiegelung meldet sich im Log" "Claude-Skills:" echo "$SOUT"
-rm -rf "$SDIR"
+scrub "$SDIR"
 
 # Ein leeres skills/ darf nichts kaputtmachen - so ist der Auslieferungszustand.
 EDIR=$(mktemp -d); mkdir -p "$EDIR/leer" "$EDIR/dest"
@@ -323,7 +334,7 @@ check "leeres Skill-Verzeichnis stoert nicht" "OK" \
     -e SKILLS_SRC=/opt/testskills -e SKILLS_DEST=/dest --entrypoint bash "$IMAGE" -c '
       source /dev/stdin <<<"$(sed -n "/^mirror_skills()/,/^}/p" /usr/local/bin/entrypoint.sh)"
       mirror_skills /opt/testskills /dest "Claude-Skills" 2>/dev/null; echo OK'
-rm -rf "$EDIR"
+scrub "$EDIR"
 
 echo
 echo "== Agenten-Rendering =="
@@ -364,6 +375,16 @@ check "model wird zu BUZZ_ACP_MODEL"       'BUZZ_ACP_MODEL="opus"' echo "$CONF"
 check "max_turn_duration wird durchgereicht" 'BUZZ_ACP_MAX_TURN_DURATION="1234"' echo "$CONF"
 check "respond_to wird durchgereicht"      'BUZZ_ACP_RESPOND_TO="allowlist"' echo "$CONF"
 check "Systemprompt liegt als Datei vor"   'BUZZ_ACP_SYSTEM_PROMPT_FILE="/prompts/probe.prompt"' echo "$CONF"
+check "Start laeuft ueber buzz-acp-launch"  'command=/usr/local/bin/buzz-acp-launch' echo "$CONF"
+check "nur der Variablenname steht in der Config" 'BUZZ_AUTH_SIG_VAR="BUZZ_AUTH_SIG_PROBE"' echo "$CONF"
+# Keine %(ENV_...)s-Referenz auf die Signatur: eine fehlende Variable laesst
+# supervisord das Programm gar nicht erst starten, und der Agent liefe dann
+# still nicht an.
+if grep -q 'ENV_BUZZ_AUTH_SIG' <<<"$CONF"; then
+  fail "die Signatur haengt an einer ENV-Referenz von supervisord"
+else
+  pass "die Signatur haengt an keiner ENV-Referenz"
+fi
 
 # Der Prompt darf kein Frontmatter mehr enthalten.
 PROMPT=$(cat "$RDIR/prompts/probe.prompt" 2>/dev/null)
@@ -413,7 +434,72 @@ docker run --rm --platform "$PLATFORM" --entrypoint "" \
 check "kommagetrennte Allowlist kommt unversehrt im Prozess an" "$PK1,$PK2" \
   cat "$RDIR/out/env.txt"
 
-rm -rf "$RDIR"
+scrub "$RDIR"
+
+echo
+echo "== Owner-Attestierung =="
+# Das NIP-OA-Tag ist JSON und kann deshalb nicht durch supervisords
+# environment= laufen (Kommas trennen dort, Anfuehrungszeichen sind nicht
+# maskierbar). buzz-acp-launch baut es aus Owner und Signatur zusammen. Geht
+# das schief, laeuft der Agent still ohne Attestierung - und ist fuer Buzz
+# dann kein Agent. Geprueft wird mit einem untergeschobenen buzz-acp, das nur
+# seine Umgebung ausgibt.
+LDIR=$(mktemp -d)
+printf '#!/bin/sh\nenv\n' > "$LDIR/fake-buzz-acp"
+chmod 0755 "$LDIR/fake-buzz-acp"
+SIG=$(printf 'ab%.0s' $(seq 64))
+# So ruft supervisord den Wrapper auf: der Name der Variablen kommt aus der
+# Config, ihr Wert aus der Umgebung des Entrypoints.
+launch() {  # launch <env-argumente...>
+  docker run --rm --platform "$PLATFORM" --entrypoint "" \
+    -v "$LDIR/fake-buzz-acp:/usr/local/bin/buzz-acp:ro" \
+    "$@" "$IMAGE" /usr/local/bin/buzz-acp-launch 2>&1
+}
+
+LOUT=$(launch -e BUZZ_ACP_AGENT_OWNER=deadbeef \
+  -e BUZZ_AUTH_SIG_VAR=BUZZ_AUTH_SIG_PROBE -e BUZZ_AUTH_SIG_PROBE="$SIG")
+check "Tag entsteht aus Owner und Signatur" "BUZZ_AUTH_TAG=[\"auth\",\"deadbeef\",\"\",\"$SIG\"]" echo "$LOUT"
+
+# Ohne Signatur darf kein Tag entstehen - ein leeres oder halbes Tag waere
+# schlimmer als keines, es haengt an jedem Event. Zwei Faelle: Variable ganz
+# ohne Namen, und ein Name, hinter dem nichts steht (so laeuft ein Agent ohne
+# Eintrag in BUZZ_AUTH_TAGS).
+LNONE=$(launch -e BUZZ_ACP_AGENT_OWNER=deadbeef)
+if grep -q '^BUZZ_AUTH_TAG=' <<<"$LNONE"; then
+  fail "ohne Signatur entsteht trotzdem ein Tag"
+else
+  pass "ohne Signatur entsteht kein Tag"
+fi
+
+LEMPTY=$(launch -e BUZZ_ACP_AGENT_OWNER=deadbeef -e BUZZ_AUTH_SIG_VAR=BUZZ_AUTH_SIG_PROBE)
+if grep -q '^BUZZ_AUTH_TAG=' <<<"$LEMPTY"; then
+  fail "leere Signatur ergibt trotzdem ein Tag"
+else
+  pass "Agent ohne Eintrag in BUZZ_AUTH_TAGS startet ohne Tag"
+fi
+
+# Signatur ohne Owner: nicht abbrechen, aber auch nicht schweigen.
+LWARN=$(launch -e BUZZ_AUTH_SIG_VAR=BUZZ_AUTH_SIG_PROBE -e BUZZ_AUTH_SIG_PROBE="$SIG")
+check "Signatur ohne Owner wird gemeldet" "BUZZ_ACP_AGENT_OWNER aber leer" echo "$LWARN"
+
+# Ein manipulierter Variablenname darf nicht im eval landen.
+LBAD=$(launch -e BUZZ_ACP_AGENT_OWNER=deadbeef -e 'BUZZ_AUTH_SIG_VAR=BUZZ_AUTH_SIG_X;id')
+check "krummer Variablenname wird abgewiesen" "kein gueltiger Variablenname" echo "$LBAD"
+if grep -qE '^BUZZ_AUTH_TAG=|uid=' <<<"$LBAD"; then
+  fail "krummer Variablenname wurde ausgewertet"
+else
+  pass "krummer Variablenname bleibt ohne Wirkung"
+fi
+scrub "$LDIR"
+
+echo
+echo "== Werkzeuge =="
+# Die Skripte unter tools/ laufen auf dem Host, nicht im Image - geprueft wird
+# hier nur, dass ihre Selbsttests durchgehen. Sie pruefen sich gegen die
+# offiziellen BIP-340-Vektoren und das signierte Beispiel aus NIP-OA.md.
+for tool in mint-auth-tag publish-agent-policy enroll-agent; do
+  check "Selbsttest $tool" "bestanden" python3 "tools/$tool.py" --selftest
+done
 
 echo
 echo "== Agent mitlesen =="

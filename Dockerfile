@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 # Alle Stages sind linux/amd64: die Buzz-Binaries gibt es nur fuer diese Architektur.
 
-ARG BUZZ_VERSION=0.5.20
-ARG BUZZ_DEB_SHA256=sha256:55c7de42bc196aed69597b01c25b3daf78aa8840f0f33174d7534e87cac71424
+ARG BUZZ_VERSION=0.5.26
+ARG BUZZ_DEB_SHA256=sha256:9c64119401e8d8cd56535fdb66eef8a944a4aece233b5c7ddf7dcd6ed3bb6697
 
 FROM --platform=linux/amd64 debian:trixie-slim AS buzz-binaries
 ARG BUZZ_VERSION
@@ -110,6 +110,8 @@ COPY docker/supervisord.conf /etc/supervisor/supervisord.conf
 COPY docker/entrypoint.sh    /usr/local/bin/entrypoint.sh
 COPY docker/git-credential-github-token /usr/local/bin/git-credential-github-token
 COPY docker/render-agents.py /usr/local/bin/render-agents.py
+# Setzt BUZZ_AUTH_TAG aus Owner-Pubkey und Signatur, bevor buzz-acp startet.
+COPY docker/buzz-acp-launch  /usr/local/bin/buzz-acp-launch
 # Der Buzz-Agent laeuft ohne Terminal; agent-watch folgt seinem Transkript.
 COPY docker/agent-watch      /usr/local/bin/agent-watch
 COPY agents/ /opt/agents/
@@ -137,6 +139,7 @@ RUN chmod 0755 /usr/local/bin/git-credential-github-token \
 COPY docker/skills/ /opt/buzz-skills/
 
 RUN chmod 0755 /usr/local/bin/ttyd /usr/local/bin/entrypoint.sh /usr/local/bin/render-agents.py \
+               /usr/local/bin/buzz-acp-launch \
                /usr/local/bin/agent-watch \
  && mkdir -p /workspace /home/dev/.claude /home/dev/.buzz \
               /home/dev/.vscode-server /home/dev/.zed_server \

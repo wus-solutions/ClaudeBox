@@ -150,16 +150,40 @@ statt nach `~/.claude.json`. Sie versorgen **beide** Konsumenten — das Termina
 und den Buzz-Agenten. Ein `ANTHROPIC_API_KEY` wird nicht gebraucht; `buzz-acp`
 meldet im Log `apiType=native`.
 
-### 5. Agent-Profil
+### 5. Agent-Profil und Owner-Attestierung
 
-Ohne Profil zeigt Buzz einen aus dem Pubkey abgeleiteten Namen:
+Buzz hält eine Identität erst für einen Agenten, wenn zwei owner-gedeckte
+Events existieren — und die Reihenfolge ist nicht beliebig:
+
+1. **`kind:0` mit NIP-OA-`auth`-Tag** — die *Markierung*. Das Profil signiert
+   der Agent, das Tag darin der Owner. Ab hier gilt die Identität als Agent.
+2. **`kind:30177`, `d`-Tag = Agent-Pubkey** — die *Zulassung*, signiert vom
+   Owner. Erst sie erzeugt einen Verzeichniseintrag, und Buzz nimmt die
+   Koordinate nur an, wenn ihr Autor der im `kind:0` attestierte Owner ist.
+
+Nur mit dem ersten ist die Identität markiert, steht aber in keinem
+Verzeichnis — und dann filtert sie jeder Picker heraus, als Agent wie als
+Person. Erreichbar bleibt sie per Direktnachricht, sonst nirgends.
+
+Beides erledigt ein Aufruf. Er läuft auf dem Host, nie im Container, weil
+dafür beide privaten Schlüssel nötig sind:
 
 ```bash
-docker compose exec claude buzz users set-profile \
-  --name "Tuatara" --about "…"
+tools/enroll-agent.py --agent-name <name> --dry-run    # erst ansehen
+tools/enroll-agent.py --agent-name <name> --write-env  # dann senden
 ```
 
-Das ist ein Einmal-Schritt pro Identität und liegt bewusst nicht im Image.
+Das Skript liest den Owner-Schlüssel aus `BUZZ_OWNER_KEY`, den Agentenschlüssel
+aus `BUZZ_AGENTS`, das Relay aus `BUZZ_RELAY_URL` sowie `respond_to`,
+`respond_to_allowlist` und `parallelism` aus dem Frontmatter von
+`agents/<name>.md`. Ein vorhandenes Profil wird vorher geholt, damit `about`
+und `picture` erhalten bleiben.
+
+`--write-env` trägt zusätzlich `BUZZ_AUTH_TAGS=<name>=<signatur>` ein. Das
+braucht der laufende Agent, damit auch seine *späteren* Events das Tag tragen
+— danach einmal `docker compose up -d`.
+
+Prüfschritte und Fallstricke: [`tools/README.md`](tools/README.de.md).
 
 ### 6. GitHub-Zugriff (optional)
 

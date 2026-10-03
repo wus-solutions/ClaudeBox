@@ -150,7 +150,7 @@ fi
 # Ohne diese Skill kann der Agent nicht in Buzz antworten. buzz-acp rollt sie
 # nicht aus, deshalb liegt sie im Image.
 check "buzz-cli-Skill ist vorhanden" "buzz-cli" \
-  docker compose exec -T claude ls /home/dev/.buzz/.agents/skills/
+  docker compose exec -T claude ls /home/dev/.claude/skills/
 
 # Die echte plugins.txt, mit Netz - test/image.sh prueft nur den Mechanismus.
 check "Superpowers-Plugin ist fuer dev installiert" "superpowers@claude-plugins-official" \

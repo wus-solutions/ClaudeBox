@@ -1,0 +1,60 @@
+#!/bin/sh
+# Setzt BUZZ_AUTH_TAG und startet buzz-acp. Aufruf wie buzz-acp selbst; alle
+# Argumente werden durchgereicht.
+#
+# Warum ueberhaupt ein Wrapper: das NIP-OA-Tag ist JSON
+# (["auth","<owner>","","<signatur>"]), und supervisord trennt seine
+# environment=-Liste an Kommas. Ein JSON-Wert kaeme dort zerlegt an, die
+# Anfuehrungszeichen dazu unmaskierbar. Durch supervisord laeuft deshalb nur
+# die Signatur - 128 Hex-Zeichen, kein Trennzeichen drin - und das Tag
+# entsteht erst hier.
+#
+# Owner-Pubkey und Conditions kommen nicht aus der Konfiguration: der Owner
+# steht schon in BUZZ_ACP_AGENT_OWNER, und die Conditions sind leer, wie im
+# offiziellen Beispiel des Buzz-Repos (buzz-sdk/examples/compute_auth_tag.rs).
+# Wer ein Tag mit Bedingungen braucht, setzt BUZZ_AUTH_TAG selbst.
+set -eu
+
+# Gibt das Tag aus, oder nichts, wenn eines der beiden Teile fehlt.
+# Eigene Funktion, damit test/image.sh sie herausschneiden und pruefen kann.
+buzz_auth_tag() {  # buzz_auth_tag <owner-pubkey> <signatur>
+  if [ -n "${1:-}" ] && [ -n "${2:-}" ]; then
+    printf '["auth","%s","","%s"]' "$1" "$2"
+  fi
+}
+
+# Welche Variable die Signatur dieses Agenten haelt, sagt BUZZ_AUTH_SIG_VAR -
+# supervisord reicht den Namen durch, den Wert erbt dieser Prozess aus der
+# Umgebung des Entrypoints. Fehlt beides, laeuft der Agent ohne Attestierung.
+SIG=""
+if [ -n "${BUZZ_AUTH_SIG_VAR:-}" ]; then
+  # Vor dem eval pruefen: nur Grossbuchstaben, Ziffern und Unterstriche, und
+  # der erwartete Praefix. Der Name kommt aus render-agents.py, aber ein eval
+  # auf einen ungeprueften Namen bleibt ein eval.
+  case "$BUZZ_AUTH_SIG_VAR" in
+    BUZZ_AUTH_SIG_?*)
+      if [ -z "$(printf '%s' "$BUZZ_AUTH_SIG_VAR" | tr -d 'A-Z0-9_')" ]; then
+        SIG="$(eval "printf '%s' \"\${$BUZZ_AUTH_SIG_VAR:-}\"")"
+      else
+        echo "WARNUNG: $BUZZ_AUTH_SIG_VAR ist kein gueltiger Variablenname." >&2
+      fi
+      ;;
+    *)
+      echo "WARNUNG: BUZZ_AUTH_SIG_VAR=$BUZZ_AUTH_SIG_VAR passt nicht zum" >&2
+      echo "         erwarteten Muster BUZZ_AUTH_SIG_<NAME> - ignoriert." >&2
+      ;;
+  esac
+fi
+
+TAG="$(buzz_auth_tag "${BUZZ_ACP_AGENT_OWNER:-}" "$SIG")"
+if [ -n "$TAG" ]; then
+  BUZZ_AUTH_TAG="$TAG"
+  export BUZZ_AUTH_TAG
+elif [ -n "$SIG" ]; then
+  # Signatur ohne Owner ergibt kein gueltiges Tag. Nicht abbrechen: der Agent
+  # arbeitet auch ohne Attestierung, er ist dann nur kein erkennbarer Agent.
+  echo "WARNUNG: eine Signatur ist gesetzt, BUZZ_ACP_AGENT_OWNER aber leer." >&2
+  echo "         Der Agent laeuft ohne Owner-Attestierung." >&2
+fi
+
+exec /usr/local/bin/buzz-acp "$@"

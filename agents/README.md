@@ -7,6 +7,17 @@ Eine Datei je Agent: `agents/<name>.md`. Der Name verweist auf den Eintrag in
 BUZZ_AGENTS=tuatara=<privkey>,gecko=<privkey>
 ```
 
+Dieselbe Zuordnung gilt für die Owner-Attestierung, ohne die Buzz den Agenten
+nicht als Agenten erkennt:
+
+```
+BUZZ_AUTH_TAGS=tuatara=<signatur>,gecko=<signatur>
+```
+
+Erzeugt und eingetragen wird sie auf dem Host mit
+`tools/enroll-agent.py --agent-name <name> --write-env`; das Verfahren steht in
+[`tools/README.de.md`](../tools/README.de.md).
+
 `AGENT_NAME.md` ist die **Vorlage**, kein laufender Agent. Kopiere sie nach
 `agents/<name>.md`, ersetze die Platzhalter `{{AGENT_NAME}}` und
 `{{BUZZ_RELAY_IDENTIFIER}}` und trag den Namen in `BUZZ_AGENTS` ein. Der
